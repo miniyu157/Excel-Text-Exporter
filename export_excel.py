@@ -4,6 +4,7 @@ import os
 # --- 1. 依赖库检测 ---
 try:
     import openpyxl
+    from openpyxl.worksheet.formula import ArrayFormula
     from openpyxl.utils import get_column_letter
 except ImportError:
     print("错误: 缺少必要的库 'openpyxl'。")
@@ -50,9 +51,9 @@ def get_rule_details(rule, is_markdown=False):
     return "  \n".join(details) if is_markdown else "\n".join(details)
 
 
-def export_excel_to_text(file_path, archive_file, visual_file_txt, visual_file_md_plain, visual_file_md_rich):
+def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visual_file_md_rich):
     """
-    将Excel文件导出为四种格式的文本文件。
+    将Excel文件导出为三种可视化格式的文本文件。
     """
     try:
         wb_formulas = openpyxl.load_workbook(file_path, data_only=False)
@@ -62,47 +63,6 @@ def export_excel_to_text(file_path, archive_file, visual_file_txt, visual_file_m
         print(f"详细信息: {e}")
         sys.exit(1)
 
-    # --- Part 1: 生成详细归档文件 (archive_file) ---
-    with open(archive_file, 'w', encoding='utf-8') as f:
-        f.write(f"--- Excel文件完整归档 ---\n")
-        f.write(f"文件: {file_path}\n")
-        f.write(f"归档时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("=" * 50 + "\n\n")
-        for sheet_name in wb_formulas.sheetnames:
-            sheet = wb_formulas[sheet_name]
-            sheet_values = wb_values[sheet_name]
-            f.write(f"工作表: {sheet_name}\n")
-            f.write("-" * 40 + "\n\n")
-            f.write("单元格数据:\n")
-            if sheet.calculate_dimension() == 'A1:A1' and sheet['A1'].value is None:
-                 f.write("(此工作表为空)\n")
-            else:
-                for row_idx in range(1, sheet.max_row + 1):
-                    for col_idx in range(1, sheet.max_column + 1):
-                        cell = sheet.cell(row=row_idx, column=col_idx)
-                        if cell.value is not None:
-                            display_value = sheet_values.cell(row=row_idx, column=col_idx).value
-                            f.write(f"  - 单元格: {cell.coordinate}\n")
-                            if cell.data_type == 'f':
-                                f.write(f"    公式: {cell.value}\n")
-                                f.write(f"    显示值: {display_value}\n")
-                            else:
-                                f.write(f"    值: {cell.value}\n")
-            f.write("\n条件格式:\n")
-            if sheet.conditional_formatting:
-                for cf_obj in sheet.conditional_formatting:
-                    f.write(f"  - 作用范围: {cf_obj.sqref}\n")
-                    for i, rule in enumerate(cf_obj.rules):
-                        f.write(f"    - 规则 #{i + 1}\n")
-                        f.write(f"{get_rule_details(rule)}\n")
-                    f.write("\n")
-            else:
-                f.write("  (此工作表无条件格式)\n")
-            f.write("=" * 50 + "\n\n")
-    # --- 实时输出成功信息 ---
-    print(f"已生成: {archive_file}")
-
-    # --- Part 2, 3, 4: 分析并生成三种可视化文件 ---
     visual_txt_content = f"--- Excel文件可视化视图 ---\n文件: {file_path}\n生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "=" * 50 + "\n\n"
     visual_md_plain_content = ""
     visual_md_rich_content = ""
@@ -123,7 +83,8 @@ def export_excel_to_text(file_path, archive_file, visual_file_txt, visual_file_m
                 display_text = ""
                 if cell_formulas.data_type == 'f':
                     tag = f"[{formula_counter}]"
-                    formulas_map[tag] = cell_formulas.value
+                    formula_text = cell_formulas.value.text if isinstance(cell_formulas.value, ArrayFormula) else cell_formulas.value
+                    formulas_map[tag] = formula_text
                     val = cell_values.value if cell_values.value is not None else ""
                     display_text = f"{val}{tag}"
                     formula_counter += 1
@@ -252,14 +213,13 @@ if __name__ == "__main__":
     base_name = os.path.basename(input_excel_file)
     name_without_ext = os.path.splitext(base_name)[0]
 
-    archive_output_file = os.path.join(output_dir, f"{name_without_ext}_archive.txt")
     visual_output_file_txt = os.path.join(output_dir, f"{name_without_ext}_visual.txt")
     visual_output_file_md_plain = os.path.join(output_dir, f"{name_without_ext}_visual_plain.md")
     visual_output_file_md_rich = os.path.join(output_dir, f"{name_without_ext}_visual_rich.md")
 
     print(f"正在处理文件: {input_excel_file}")
     try:
-        export_excel_to_text(input_excel_file, archive_output_file, visual_output_file_txt, visual_output_file_md_plain, visual_output_file_md_rich)
+        export_excel_to_text(input_excel_file, visual_output_file_txt, visual_output_file_md_plain, visual_output_file_md_rich)
         print("\n处理完成！")
     except Exception as e:
         print(f"\n处理过程中发生未知错误: {e}")
