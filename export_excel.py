@@ -63,7 +63,7 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
         print(f"详细信息: {e}")
         sys.exit(1)
 
-    visual_txt_content = f"--- Excel文件可视化视图 ---\n文件: {file_path}\n生成时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" + "=" * 50 + "\n\n"
+    visual_txt_content = ""
     visual_md_plain_content = ""
     visual_md_rich_content = ""
 
