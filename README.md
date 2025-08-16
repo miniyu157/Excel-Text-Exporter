@@ -2,6 +2,12 @@
 
 将 Excel 导出为多种可读的文本和 Markdown 格式，一并处理单元格公式和条件格式。
 
+## 依赖
+
+```bash
+pip install openpyxl
+```
+
 ## 用法
 
 ```bash
