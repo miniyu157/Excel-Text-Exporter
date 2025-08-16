@@ -11,7 +11,7 @@ pip install openpyxl
 ## 用法
 
 ```bash
-python export_excel.py example.xlsx
+python export_excel.py <example.xlsx>
 ```
 
 ## 效果
