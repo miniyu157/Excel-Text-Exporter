@@ -1,6 +1,6 @@
 # Excel-Text-Exporter
 
-将 Excel 导出为多种可读的文本和 Markdown 格式，一并处理单元格公式和条件格式。
+将 Excel 导出为多种可读的文本和 Markdown 格式。
 
 ## 依赖
 
@@ -16,7 +16,7 @@ python export_excel.py <example.xlsx>
 
 ## 效果
 
-脚本会在当前目录下创建一个 `output` 文件夹，并根据源文件名生成三个文件，每个文件都处理单元格公式和条件格式。
+脚本会在当前目录下创建一个 `output` 文件夹，并根据源文件名生成三个文件，每个文件都处理单元格公式、条件格式、命名区域、超链接以及批注。
 
 例如，处理 `example.xlsx` 会输出：
 

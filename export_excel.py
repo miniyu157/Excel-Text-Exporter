@@ -50,6 +50,65 @@ def get_rule_details(rule, is_markdown=False):
 
     return "  \n".join(details) if is_markdown else "\n".join(details)
 
+def generate_legends(format_type, formulas_map, comments_map, hyperlinks_map, named_ranges_map, conditional_formatting):
+    """根据指定的格式生成所有图例部分的字符串。"""
+    legend_str = ""
+    
+    if named_ranges_map:
+        if format_type == 'md':
+            legend_str += "\n### 命名区域\n"
+            for name, dest in sorted(named_ranges_map.items()):
+                legend_str += f"- **`{name}`**: `{dest}`\n"
+        else:
+            legend_str += "\n--- 命名区域 ---\n"
+            for name, dest in sorted(named_ranges_map.items()):
+                legend_str += f"{name}: {dest}\n"
+
+    if formulas_map or comments_map or hyperlinks_map:
+        if format_type == 'md':
+            legend_str += "\n### 引用列表\n"
+            if formulas_map:
+                legend_str += "\n#### 表达式\n"
+                for tag, formula in sorted(formulas_map.items(), key=lambda i: int(i[0][2:-1])):
+                    legend_str += f"- **`{tag}`**: `{formula}`\n"
+            if comments_map:
+                legend_str += "\n#### 批注\n"
+                for tag, text in sorted(comments_map.items(), key=lambda i: int(i[0][2:-1])):
+                    legend_str += f"- **`{tag}`**: {text}\n"
+            if hyperlinks_map:
+                legend_str += "\n#### 超链接\n"
+                for tag, target in sorted(hyperlinks_map.items(), key=lambda i: int(i[0][2:-1])):
+                    legend_str += f"- **`{tag}`**: {target}\n"
+        else:
+            legend_str += "\n--- 引用列表 ---\n"
+            if formulas_map:
+                legend_str += "\n  表达式:\n"
+                for tag, formula in sorted(formulas_map.items(), key=lambda i: int(i[0][2:-1])):
+                    legend_str += f"  {tag}: {formula}\n"
+            if comments_map:
+                legend_str += "\n  批注:\n"
+                for tag, text in sorted(comments_map.items(), key=lambda i: int(i[0][2:-1])):
+                    legend_str += f"  {tag}: {text}\n"
+            if hyperlinks_map:
+                legend_str += "\n  超链接:\n"
+                for tag, target in sorted(hyperlinks_map.items(), key=lambda i: int(i[0][2:-1])):
+                    legend_str += f"  {tag}: {target}\n"
+
+    if conditional_formatting:
+        if format_type == 'md':
+            legend_str += "\n### 条件格式\n"
+            for cf_obj in conditional_formatting:
+                legend_str += f"- **作用范围**: `{cf_obj.sqref}`\n"
+                for i, rule in enumerate(cf_obj.rules):
+                    legend_str += f"  - **规则 #{i + 1}**\n    - {get_rule_details(rule, is_markdown=True)}\n"
+        else:
+            legend_str += "\n--- 条件格式 ---\n"
+            for cf_obj in conditional_formatting:
+                legend_str += f"  - 作用范围: {cf_obj.sqref}\n"
+                for i, rule in enumerate(cf_obj.rules):
+                    legend_str += f"    - 规则 #{i + 1}\n{get_rule_details(rule)}\n"
+    
+    return legend_str
 
 def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visual_file_md_rich):
     """
@@ -67,30 +126,50 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
     visual_md_plain_content = ""
     visual_md_rich_content = ""
 
-    for sheet_name in wb_formulas.sheetnames:
+    sheet_names = wb_formulas.sheetnames
+
+    for sheet_idx, sheet_name in enumerate(sheet_names):
         sheet_formulas = wb_formulas[sheet_name]
         sheet_values = wb_values[sheet_name]
         
-        full_grid_data, formulas_map = [], {}
-        formula_counter = 1
+        full_grid_data = []
+        formulas_map, comments_map, hyperlinks_map, named_ranges_map = {}, {}, {}, {}
+        formula_counter, comment_counter, hyperlink_counter = 1, 1, 1
         non_empty_rows, non_empty_cols = set(), set()
         
+        for name, dest in wb_formulas.defined_names.items():
+            if dest.localSheetId is None or dest.localSheetId == sheet_idx:
+                named_ranges_map[name] = dest.attr_text
+                
         for r_idx in range(1, sheet_formulas.max_row + 1):
             row_data = []
             for c_idx in range(1, sheet_formulas.max_column + 1):
                 cell_formulas = sheet_formulas.cell(row=r_idx, column=c_idx)
                 cell_values = sheet_values.cell(row=r_idx, column=c_idx)
-                display_text = ""
+                
+                val = cell_values.value if cell_values.value is not None else ""
+                tags = []
+
                 if cell_formulas.data_type == 'f':
-                    tag = f"[{formula_counter}]"
+                    tag = f"[f{formula_counter}]"
                     formula_text = cell_formulas.value.text if isinstance(cell_formulas.value, ArrayFormula) else cell_formulas.value
                     formulas_map[tag] = formula_text
-                    val = cell_values.value if cell_values.value is not None else ""
-                    display_text = f"{val}{tag}"
+                    tags.append(tag)
                     formula_counter += 1
-                else:
-                    val = cell_values.value if cell_values.value is not None else ""
-                    display_text = str(val)
+                
+                if cell_formulas.comment:
+                    tag = f"[c{comment_counter}]"
+                    comments_map[tag] = cell_formulas.comment.text
+                    tags.append(tag)
+                    comment_counter += 1
+                
+                if cell_formulas.hyperlink:
+                    tag = f"[l{hyperlink_counter}]"
+                    hyperlinks_map[tag] = cell_formulas.hyperlink.target
+                    tags.append(tag)
+                    hyperlink_counter += 1
+
+                display_text = f"{val}{''.join(tags)}"
                 if display_text.strip() != "":
                     non_empty_rows.add(r_idx)
                     non_empty_cols.add(c_idx)
@@ -167,22 +246,9 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
                 visual_md_rich_content += "    </tr>\n"
             visual_md_rich_content += "  </tbody>\n</table>\n"
 
-        txt_legend, md_legend = "", ""
-        if formulas_map:
-            txt_legend += "\n--- 引用列表 ---\n"
-            md_legend += "\n### 引用列表\n"
-            for tag, formula in sorted(formulas_map.items(), key=lambda item: int(item[0][1:-1])):
-                txt_legend += f"{tag}: {formula}\n"
-                md_legend += f"- **`{tag}`**: `{formula}`\n"
-        if sheet_formulas.conditional_formatting:
-            txt_legend += "\n--- 条件格式 ---\n"
-            md_legend += "\n### 条件格式\n"
-            for cf_obj in sheet_formulas.conditional_formatting:
-                txt_legend += f"  - 作用范围: {cf_obj.sqref}\n"
-                md_legend += f"- **作用范围**: `{cf_obj.sqref}`\n"
-                for i, rule in enumerate(cf_obj.rules):
-                    txt_legend += f"    - 规则 #{i + 1}\n{get_rule_details(rule)}\n"
-                    md_legend += f"  - **规则 #{i + 1}**\n    - {get_rule_details(rule, is_markdown=True)}\n"
+        txt_legend = generate_legends('txt', formulas_map, comments_map, hyperlinks_map, named_ranges_map, sheet_formulas.conditional_formatting)
+        md_legend = generate_legends('md', formulas_map, comments_map, hyperlinks_map, named_ranges_map, sheet_formulas.conditional_formatting)
+        
         visual_txt_content += txt_legend
         visual_md_plain_content += md_legend
         visual_md_rich_content += md_legend
@@ -208,10 +274,7 @@ if __name__ == "__main__":
         print(f"错误: 文件 '{input_excel_file}' 不是 .xlsx 格式。")
         sys.exit(1)
 
-    # --- 路径修正 ---
-    # 获取脚本所在的真实目录
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    # 在脚本目录下创建output文件夹
     output_dir = os.path.join(script_dir, 'output')
     os.makedirs(output_dir, exist_ok=True)
     
