@@ -208,8 +208,13 @@ if __name__ == "__main__":
         print(f"错误: 文件 '{input_excel_file}' 不是 .xlsx 格式。")
         sys.exit(1)
 
-    output_dir = 'output'
+    # --- 路径修正 ---
+    # 获取脚本所在的真实目录
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    # 在脚本目录下创建output文件夹
+    output_dir = os.path.join(script_dir, 'output')
     os.makedirs(output_dir, exist_ok=True)
+    
     base_name = os.path.basename(input_excel_file)
     name_without_ext = os.path.splitext(base_name)[0]
 
