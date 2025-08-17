@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 
 # --- 1. 依赖库检测 ---
 try:
@@ -149,14 +150,28 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
                 
                 val = cell_values.value if cell_values.value is not None else ""
                 tags = []
-
-                if cell_formulas.data_type == 'f':
-                    tag = f"[f{formula_counter}]"
-                    formula_text = cell_formulas.value.text if isinstance(cell_formulas.value, ArrayFormula) else cell_formulas.value
-                    formulas_map[tag] = formula_text
-                    tags.append(tag)
-                    formula_counter += 1
                 
+                if cell_formulas.data_type == 'f':
+                    formula_val = cell_formulas.value
+                    real_formula_to_store = None
+                    
+                    if isinstance(formula_val, str) and "__xludf.DUMMYFUNCTION" in formula_val:
+                        if '"COMPUTED_VALUE"' not in formula_val:
+                            # 是主公式，保留openpyxl提供的完整原始值
+                            real_formula_to_store = formula_val
+                    elif isinstance(formula_val, ArrayFormula):
+                        # 是旧式数组公式
+                        real_formula_to_store = formula_val.text
+                    elif isinstance(formula_val, str):
+                        # 是普通公式
+                        real_formula_to_store = formula_val
+                    
+                    if real_formula_to_store is not None:
+                        tag = f"[f{formula_counter}]"
+                        formulas_map[tag] = real_formula_to_store
+                        tags.append(tag)
+                        formula_counter += 1
+
                 if cell_formulas.comment:
                     tag = f"[c{comment_counter}]"
                     comments_map[tag] = cell_formulas.comment.text
