@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import json
 
 # --- 1. 依赖库检测 ---
 try:
@@ -8,13 +9,24 @@ try:
     from openpyxl.worksheet.formula import ArrayFormula
     from openpyxl.utils import get_column_letter
     import toml
+    import yaml
 except ImportError as e:
     missing_library = e.name
     print(f"错误: 缺少必要的库 '{missing_library}'。")
+    # PyYAML在pip中被称为pyyaml
+    if missing_library == 'yaml':
+        missing_library = 'pyyaml'
     print(f"请使用此命令安装: pip install {missing_library}")
     sys.exit(1)
 
 import datetime
+
+def json_default_serializer(obj):
+    """为JSON序列化提供自定义的默认转换器。"""
+    if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+        return obj.isoformat()
+    # 对于任何其他未知类型，返回其字符串表示形式以避免崩溃
+    return str(obj)
 
 def get_display_width(s):
     """计算字符串的显示宽度，中文字符宽度为2，英文字符为1。"""
@@ -113,9 +125,9 @@ def generate_legends(format_type, formulas_map, comments_map, hyperlinks_map, na
     
     return legend_str
 
-def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_file_md_plain, visual_file_md_rich):
+def export_excel_to_text(file_path, archive_file_toml, archive_file_json, archive_file_yaml, visual_file_txt, visual_file_md_plain, visual_file_md_rich):
     """
-    将Excel文件导出为四种格式的文本文件。
+    将Excel文件导出为六种格式的文本文件。
     """
     try:
         wb_formulas = openpyxl.load_workbook(file_path, data_only=False)
@@ -125,14 +137,7 @@ def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_f
         print(f"详细信息: {e}")
         sys.exit(1)
 
-    # --- Part 1: 准备TOML归档数据结构 ---
-    archive_data = {
-        'source_file': file_path,
-        'export_timestamp': datetime.datetime.now().isoformat(),
-        'sheets': []
-    }
-
-    # --- Part 2, 3, 4: 准备可视化文件内容 ---
+    archive_data = {'sheets': []}
     visual_txt_content = ""
     visual_md_plain_content = ""
     visual_md_rich_content = ""
@@ -142,40 +147,26 @@ def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_f
         sheet_formulas = wb_formulas[sheet_name]
         sheet_values = wb_values[sheet_name]
         
-        sheet_data_for_toml = {
-            'name': sheet_name,
-            'named_ranges': {},
-            'conditional_formatting': [],
-            'cells': {}
-        }
-        
         full_grid_data = []
-        formulas_map, comments_map, hyperlinks_map = {}, {}, {}
+        formulas_map, comments_map, hyperlinks_map, named_ranges_map = {}, {}, {}, {}
         formula_counter, comment_counter, hyperlink_counter = 1, 1, 1
         non_empty_rows, non_empty_cols = set(), set()
         
-        named_ranges_map = {}
         for name, dest in wb_formulas.defined_names.items():
             if dest.localSheetId is None or dest.localSheetId == sheet_idx:
                 named_ranges_map[name] = dest.attr_text
-        sheet_data_for_toml['named_ranges'] = named_ranges_map
-        
+                
         for r_idx in range(1, sheet_formulas.max_row + 1):
             row_data = []
             for c_idx in range(1, sheet_formulas.max_column + 1):
                 cell_formulas = sheet_formulas.cell(row=r_idx, column=c_idx)
                 cell_values = sheet_values.cell(row=r_idx, column=c_idx)
-                
                 val = cell_values.value if cell_values.value is not None else ""
                 tags = []
-                cell_toml_data = {}
+                if str(val).strip() != "" or cell_formulas.comment or cell_formulas.hyperlink or cell_formulas.data_type == 'f':
+                    non_empty_rows.add(r_idx)
+                    non_empty_cols.add(c_idx)
                 
-                # 处理TOML值，特别是日期时间
-                if isinstance(val, datetime.datetime):
-                    cell_toml_data['value'] = val.isoformat()
-                elif val != "":
-                    cell_toml_data['value'] = val
-
                 if cell_formulas.data_type == 'f':
                     formula_val = cell_formulas.value
                     real_formula_to_store = None
@@ -186,49 +177,28 @@ def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_f
                         real_formula_to_store = formula_val.text
                     elif isinstance(formula_val, str):
                         real_formula_to_store = formula_val
-                    
                     if real_formula_to_store is not None:
                         tag = f"[f{formula_counter}]"
                         formulas_map[tag] = real_formula_to_store
-                        cell_toml_data['formula'] = real_formula_to_store
                         tags.append(tag)
                         formula_counter += 1
 
                 if cell_formulas.comment:
                     tag = f"[c{comment_counter}]"
-                    comment_text = cell_formulas.comment.text
-                    comments_map[tag] = comment_text
-                    cell_toml_data['comment'] = comment_text
+                    comments_map[tag] = cell_formulas.comment.text
                     tags.append(tag)
                     comment_counter += 1
                 
                 if cell_formulas.hyperlink:
                     tag = f"[l{hyperlink_counter}]"
-                    target = cell_formulas.hyperlink.target
-                    hyperlinks_map[tag] = target
-                    cell_toml_data['hyperlink'] = target
+                    hyperlinks_map[tag] = cell_formulas.hyperlink.target
                     tags.append(tag)
                     hyperlink_counter += 1
 
-                if cell_toml_data:
-                    sheet_data_for_toml['cells'][cell_formulas.coordinate] = cell_toml_data
-
                 display_text = f"{val}{''.join(tags)}"
-                if display_text.strip() != "":
-                    non_empty_rows.add(r_idx)
-                    non_empty_cols.add(c_idx)
                 row_data.append(display_text)
             full_grid_data.append(row_data)
 
-        for cf_obj in sheet_formulas.conditional_formatting:
-            for rule in cf_obj.rules:
-                rule_dict = {'range': cf_obj.sqref, 'type': rule.type}
-                if hasattr(rule, 'operator') and rule.operator: rule_dict['operator'] = rule.operator
-                if hasattr(rule, 'formula') and rule.formula: rule_dict['formula'] = rule.formula
-                sheet_data_for_toml['conditional_formatting'].append(rule_dict)
-
-        archive_data['sheets'].append(sheet_data_for_toml)
-        
         sheet_header_txt = f"工作表: {sheet_name}\n" + "-" * 40 + "\n\n"
         sheet_header_md = f"## 工作表: {sheet_name}\n\n"
         
@@ -236,11 +206,55 @@ def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_f
             visual_txt_content += sheet_header_txt + "(此工作表无数据)\n\n"
             visual_md_plain_content += sheet_header_md + "*(此工作表无数据)*\n\n"
             visual_md_rich_content += sheet_header_md + "*(此工作表无数据)*\n\n"
+            archive_data['sheets'].append({'name': sheet_name, 'data_boundary': 'empty'})
             continue
 
         min_r, max_r = min(non_empty_rows), max(non_empty_rows)
         min_c, max_c = min(non_empty_cols), max(non_empty_cols)
         
+        sheet_data_for_archive = {
+            'name': sheet_name,
+            'data_boundary': f"{get_column_letter(min_c)}{min_r}:{get_column_letter(max_c)}{max_r}",
+            'named_ranges': named_ranges_map,
+            'conditional_formatting': [],
+            'cells': {}
+        }
+
+        for r_idx in range(min_r, max_r + 1):
+            for c_idx in range(min_c, max_c + 1):
+                cell_formulas = sheet_formulas.cell(row=r_idx, column=c_idx)
+                cell_values = sheet_values.cell(row=r_idx, column=c_idx)
+                cell_archive_data = {}
+                val = cell_values.value
+                
+                if isinstance(val, datetime.datetime) or isinstance(val, datetime.date) or isinstance(val, datetime.time):
+                    cell_archive_data['value'] = val
+                elif val is not None:
+                    cell_archive_data['value'] = val
+
+                if cell_formulas.data_type == 'f':
+                    formula_val = cell_formulas.value
+                    real_formula_to_store = None
+                    if isinstance(formula_val, str) and "__xludf.DUMMYFUNCTION" in formula_val:
+                        if '"COMPUTED_VALUE"' not in formula_val: real_formula_to_store = formula_val
+                    elif isinstance(formula_val, ArrayFormula): real_formula_to_store = formula_val.text
+                    elif isinstance(formula_val, str): real_formula_to_store = formula_val
+                    if real_formula_to_store is not None: cell_archive_data['formula'] = real_formula_to_store
+
+                if cell_formulas.comment: cell_archive_data['comment'] = cell_formulas.comment.text
+                if cell_formulas.hyperlink: cell_archive_data['hyperlink'] = cell_formulas.hyperlink.target
+                
+                if cell_archive_data:
+                    sheet_data_for_archive['cells'][cell_formulas.coordinate] = cell_archive_data
+
+        for cf_obj in sheet_formulas.conditional_formatting:
+            for rule in cf_obj.rules:
+                rule_dict = {'range': str(cf_obj.sqref), 'type': rule.type}
+                if hasattr(rule, 'operator') and rule.operator: rule_dict['operator'] = rule.operator
+                if hasattr(rule, 'formula') and rule.formula: rule_dict['formula'] = [str(f) for f in rule.formula]
+                sheet_data_for_archive['conditional_formatting'].append(rule_dict)
+        archive_data['sheets'].append(sheet_data_for_archive)
+
         merge_info = {}
         for merged_range in sheet_formulas.merged_cells.ranges:
             min_col, min_row, max_col, max_row = merged_range.bounds
@@ -248,8 +262,7 @@ def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_f
             merge_info[primary_cell] = {'primary': True, 'colspan': max_col - min_col + 1, 'rowspan': max_row - min_row + 1}
             for r in range(min_row, max_row + 1):
                 for c in range(min_col, max_col + 1):
-                    if (r, c) != primary_cell:
-                        merge_info[(r, c)] = {'primary': False}
+                    if (r, c) != primary_cell: merge_info[(r, c)] = {'primary': False}
 
         col_widths = {c: get_display_width(get_column_letter(c)) for c in range(min_c, max_c + 1)}
         for r_idx in range(min_r, max_r + 1):
@@ -301,21 +314,20 @@ def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_f
 
         txt_legend = generate_legends('txt', formulas_map, comments_map, hyperlinks_map, named_ranges_map, sheet_formulas.conditional_formatting)
         md_legend = generate_legends('md', formulas_map, comments_map, hyperlinks_map, named_ranges_map, sheet_formulas.conditional_formatting)
-        
         visual_txt_content += txt_legend
         visual_md_plain_content += md_legend
         visual_md_rich_content += md_legend
-
-    with open(archive_file_toml, 'w', encoding='utf-8') as f:
-        toml.dump(archive_data, f)
-    print(f"已生成: {archive_file_toml}")
         
+    with open(archive_file_toml, 'w', encoding='utf-8') as f: toml.dump(archive_data, f)
+    print(f"已生成: {archive_file_toml}")
+    with open(archive_file_json, 'w', encoding='utf-8') as f: json.dump(archive_data, f, ensure_ascii=False, indent=4, default=json_default_serializer)
+    print(f"已生成: {archive_file_json}")
+    with open(archive_file_yaml, 'w', encoding='utf-8') as f: yaml.dump(archive_data, f, allow_unicode=True, sort_keys=False)
+    print(f"已生成: {archive_file_yaml}")
     with open(visual_file_txt, 'w', encoding='utf-8') as f: f.write(visual_txt_content)
     print(f"已生成: {visual_file_txt}")
-    
     with open(visual_file_md_plain, 'w', encoding='utf-8') as f: f.write(visual_md_plain_content)
     print(f"已生成: {visual_file_md_plain}")
-
     with open(visual_file_md_rich, 'w', encoding='utf-8') as f: f.write(visual_md_rich_content)
     print(f"已生成: {visual_file_md_rich}")
 
@@ -334,18 +346,19 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.realpath(__file__))
     output_dir = os.path.join(script_dir, 'output')
     os.makedirs(output_dir, exist_ok=True)
-    
     base_name = os.path.basename(input_excel_file)
     name_without_ext = os.path.splitext(base_name)[0]
 
     archive_output_file_toml = os.path.join(output_dir, f"{name_without_ext}_archive.toml")
+    archive_output_file_json = os.path.join(output_dir, f"{name_without_ext}_archive.json")
+    archive_output_file_yaml = os.path.join(output_dir, f"{name_without_ext}_archive.yaml")
     visual_output_file_txt = os.path.join(output_dir, f"{name_without_ext}_visual.txt")
     visual_output_file_md_plain = os.path.join(output_dir, f"{name_without_ext}_visual_plain.md")
     visual_output_file_md_rich = os.path.join(output_dir, f"{name_without_ext}_visual_rich.md")
 
     print(f"正在处理文件: {input_excel_file}")
     try:
-        export_excel_to_text(input_excel_file, archive_output_file_toml, visual_output_file_txt, visual_output_file_md_plain, visual_output_file_md_rich)
+        export_excel_to_text(input_excel_file, archive_output_file_toml, archive_output_file_json, archive_output_file_yaml, visual_output_file_txt, visual_output_file_md_plain, visual_output_file_md_rich)
         print("\n处理完成！")
     except Exception as e:
         print(f"\n处理过程中发生未知错误: {e}")
