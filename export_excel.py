@@ -7,9 +7,11 @@ try:
     import openpyxl
     from openpyxl.worksheet.formula import ArrayFormula
     from openpyxl.utils import get_column_letter
-except ImportError:
-    print("错误: 缺少必要的库 'openpyxl'。")
-    print("请使用此命令安装: pip install openpyxl")
+    import toml
+except ImportError as e:
+    missing_library = e.name
+    print(f"错误: 缺少必要的库 '{missing_library}'。")
+    print(f"请使用此命令安装: pip install {missing_library}")
     sys.exit(1)
 
 import datetime
@@ -111,9 +113,9 @@ def generate_legends(format_type, formulas_map, comments_map, hyperlinks_map, na
     
     return legend_str
 
-def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visual_file_md_rich):
+def export_excel_to_text(file_path, archive_file_toml, visual_file_txt, visual_file_md_plain, visual_file_md_rich):
     """
-    将Excel文件导出为三种可视化格式的文本文件。
+    将Excel文件导出为四种格式的文本文件。
     """
     try:
         wb_formulas = openpyxl.load_workbook(file_path, data_only=False)
@@ -123,25 +125,41 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
         print(f"详细信息: {e}")
         sys.exit(1)
 
+    # --- Part 1: 准备TOML归档数据结构 ---
+    archive_data = {
+        'source_file': file_path,
+        'export_timestamp': datetime.datetime.now().isoformat(),
+        'sheets': []
+    }
+
+    # --- Part 2, 3, 4: 准备可视化文件内容 ---
     visual_txt_content = ""
     visual_md_plain_content = ""
     visual_md_rich_content = ""
 
     sheet_names = wb_formulas.sheetnames
-
     for sheet_idx, sheet_name in enumerate(sheet_names):
         sheet_formulas = wb_formulas[sheet_name]
         sheet_values = wb_values[sheet_name]
         
+        sheet_data_for_toml = {
+            'name': sheet_name,
+            'named_ranges': {},
+            'conditional_formatting': [],
+            'cells': {}
+        }
+        
         full_grid_data = []
-        formulas_map, comments_map, hyperlinks_map, named_ranges_map = {}, {}, {}, {}
+        formulas_map, comments_map, hyperlinks_map = {}, {}, {}
         formula_counter, comment_counter, hyperlink_counter = 1, 1, 1
         non_empty_rows, non_empty_cols = set(), set()
         
+        named_ranges_map = {}
         for name, dest in wb_formulas.defined_names.items():
             if dest.localSheetId is None or dest.localSheetId == sheet_idx:
                 named_ranges_map[name] = dest.attr_text
-                
+        sheet_data_for_toml['named_ranges'] = named_ranges_map
+        
         for r_idx in range(1, sheet_formulas.max_row + 1):
             row_data = []
             for c_idx in range(1, sheet_formulas.max_column + 1):
@@ -150,39 +168,50 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
                 
                 val = cell_values.value if cell_values.value is not None else ""
                 tags = []
+                cell_toml_data = {}
                 
+                # 处理TOML值，特别是日期时间
+                if isinstance(val, datetime.datetime):
+                    cell_toml_data['value'] = val.isoformat()
+                elif val != "":
+                    cell_toml_data['value'] = val
+
                 if cell_formulas.data_type == 'f':
                     formula_val = cell_formulas.value
                     real_formula_to_store = None
-                    
                     if isinstance(formula_val, str) and "__xludf.DUMMYFUNCTION" in formula_val:
                         if '"COMPUTED_VALUE"' not in formula_val:
-                            # 是主公式，保留openpyxl提供的完整原始值
                             real_formula_to_store = formula_val
                     elif isinstance(formula_val, ArrayFormula):
-                        # 是旧式数组公式
                         real_formula_to_store = formula_val.text
                     elif isinstance(formula_val, str):
-                        # 是普通公式
                         real_formula_to_store = formula_val
                     
                     if real_formula_to_store is not None:
                         tag = f"[f{formula_counter}]"
                         formulas_map[tag] = real_formula_to_store
+                        cell_toml_data['formula'] = real_formula_to_store
                         tags.append(tag)
                         formula_counter += 1
 
                 if cell_formulas.comment:
                     tag = f"[c{comment_counter}]"
-                    comments_map[tag] = cell_formulas.comment.text
+                    comment_text = cell_formulas.comment.text
+                    comments_map[tag] = comment_text
+                    cell_toml_data['comment'] = comment_text
                     tags.append(tag)
                     comment_counter += 1
                 
                 if cell_formulas.hyperlink:
                     tag = f"[l{hyperlink_counter}]"
-                    hyperlinks_map[tag] = cell_formulas.hyperlink.target
+                    target = cell_formulas.hyperlink.target
+                    hyperlinks_map[tag] = target
+                    cell_toml_data['hyperlink'] = target
                     tags.append(tag)
                     hyperlink_counter += 1
+
+                if cell_toml_data:
+                    sheet_data_for_toml['cells'][cell_formulas.coordinate] = cell_toml_data
 
                 display_text = f"{val}{''.join(tags)}"
                 if display_text.strip() != "":
@@ -191,6 +220,15 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
                 row_data.append(display_text)
             full_grid_data.append(row_data)
 
+        for cf_obj in sheet_formulas.conditional_formatting:
+            for rule in cf_obj.rules:
+                rule_dict = {'range': cf_obj.sqref, 'type': rule.type}
+                if hasattr(rule, 'operator') and rule.operator: rule_dict['operator'] = rule.operator
+                if hasattr(rule, 'formula') and rule.formula: rule_dict['formula'] = rule.formula
+                sheet_data_for_toml['conditional_formatting'].append(rule_dict)
+
+        archive_data['sheets'].append(sheet_data_for_toml)
+        
         sheet_header_txt = f"工作表: {sheet_name}\n" + "-" * 40 + "\n\n"
         sheet_header_md = f"## 工作表: {sheet_name}\n\n"
         
@@ -267,6 +305,10 @@ def export_excel_to_text(file_path, visual_file_txt, visual_file_md_plain, visua
         visual_txt_content += txt_legend
         visual_md_plain_content += md_legend
         visual_md_rich_content += md_legend
+
+    with open(archive_file_toml, 'w', encoding='utf-8') as f:
+        toml.dump(archive_data, f)
+    print(f"已生成: {archive_file_toml}")
         
     with open(visual_file_txt, 'w', encoding='utf-8') as f: f.write(visual_txt_content)
     print(f"已生成: {visual_file_txt}")
@@ -296,13 +338,14 @@ if __name__ == "__main__":
     base_name = os.path.basename(input_excel_file)
     name_without_ext = os.path.splitext(base_name)[0]
 
+    archive_output_file_toml = os.path.join(output_dir, f"{name_without_ext}_archive.toml")
     visual_output_file_txt = os.path.join(output_dir, f"{name_without_ext}_visual.txt")
     visual_output_file_md_plain = os.path.join(output_dir, f"{name_without_ext}_visual_plain.md")
     visual_output_file_md_rich = os.path.join(output_dir, f"{name_without_ext}_visual_rich.md")
 
     print(f"正在处理文件: {input_excel_file}")
     try:
-        export_excel_to_text(input_excel_file, visual_output_file_txt, visual_output_file_md_plain, visual_output_file_md_rich)
+        export_excel_to_text(input_excel_file, archive_output_file_toml, visual_output_file_txt, visual_output_file_md_plain, visual_output_file_md_rich)
         print("\n处理完成！")
     except Exception as e:
         print(f"\n处理过程中发生未知错误: {e}")
