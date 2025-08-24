@@ -14,7 +14,7 @@ default_formats = [
     "csv"
 ]
 # 是否将输出的JSON文件压缩为一行。默认为 false (不压缩)。
-minify_json = true
+minify_json = false
 
 # 设置所有导出文件的存放目录名。
 [paths]
