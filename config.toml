@@ -1,0 +1,36 @@
+# Excel-Text-Exporter
+
+# 控制默认生成哪些文件。
+# 将不需要的格式从列表中移除即可禁用。
+# 可用选项: "txt", "md_plain", "md_rich", "toml", "json", "yaml", "csv"
+[outputs]
+default_formats = [
+    "txt", 
+    "md_plain", 
+    "md_rich", 
+    "toml", 
+    "json", 
+    "yaml",
+    "csv"
+]
+# 是否将输出的JSON文件压缩为一行。默认为 false (不压缩)。
+minify_json = true
+
+# 设置所有导出文件的存放目录名。
+[paths]
+output_directory = "output"
+
+# 自定义图例部分的标题。
+[legends]
+named_ranges = "命名区域"
+reference_list = "引用列表"
+expressions = "表达式"
+comments = "批注"
+hyperlinks = "超链接"
+conditional_formatting = "条件格式"
+
+# 自定义单元格内引用标识的前缀。
+[reference_ids]
+formula_prefix = "f"
+comment_prefix = "c"
+hyperlink_prefix = "l"
